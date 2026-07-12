@@ -1,0 +1,81 @@
+body {
+  background: #14171a;
+  color: #e8e6e1;
+  font-family: -apple-system, sans-serif;
+  display: flex;
+  justify-content: center;
+  padding: 40px 16px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+#preview {
+  width: 192px;
+  height: 192px;
+  image-rendering: pixelated;
+  background: #000;
+  border-radius: 8px;
+  border: 1px solid #2a2f34;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 16px 0;
+  font-size: 13px;
+  color: #9aa0a6;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4d4d;
+}
+.dot.connected {
+  background: #3ed6c0;
+}
+
+.modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.mode-btn {
+  background: #1c2024;
+  color: #e8e6e1;
+  border: 1px solid #2a2f34;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mode-btn.active {
+  border-color: #ffb020;
+  color: #ffb020;
+}
+
+.brightness {
+  display: block;
+  font-size: 13px;
+  color: #9aa0a6;
+}
+.brightness input {
+  width: 100%;
+  margin-top: 8px;
+}

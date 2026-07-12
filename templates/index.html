@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>iPixel Control</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="panel">
+    <h1>iPixel Control</h1>
+
+    <img id="preview" src="/preview.png" alt="Current frame">
+
+    <div class="status">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">connecting...</span>
+    </div>
+
+    <div class="modes">
+      {% for mode in modes %}
+        <button class="mode-btn" data-mode="{{ mode.key }}">{{ mode.label }}</button>
+      {% endfor %}
+    </div>
+
+    <label class="brightness">
+      Brightness
+      <input type="range" id="brightness" min="0" max="100" value="60">
+    </label>
+  </main>
+
+  <script>
+    async function refreshStatus() {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+
+      document.getElementById('status-text').textContent =
+        (data.connected ? 'connected' : 'disconnected') + ' · ' + data.mode;
+      document.getElementById('status-dot').classList.toggle('connected', data.connected);
+
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === data.mode);
+      });
+
+      document.getElementById('brightness').value = data.brightness;
+    }
+
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await fetch('/api/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: btn.dataset.mode }),
+        });
+        refreshStatus();
+      });
+    });
+
+    document.getElementById('brightness').addEventListener('change', async (e) => {
+      await fetch('/api/brightness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: e.target.value }),
+      });
+    });
+
+    setInterval(refreshStatus, 3000);
+    setInterval(() => {
+      document.getElementById('preview').src = '/preview.png?t=' + Date.now();
+    }, 5000);
+    refreshStatus();
+  </script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+flask
+pypixelcolor
+pillow
+beautifulsoup4
+requests
