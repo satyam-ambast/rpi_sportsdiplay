@@ -1,10 +1,16 @@
+* {
+  box-sizing: border-box;
+}
+
 body {
   background: #14171a;
   color: #e8e6e1;
   font-family: -apple-system, sans-serif;
   display: flex;
   justify-content: center;
-  padding: 40px 16px;
+  margin: 0;
+  padding: 32px 16px calc(32px + env(safe-area-inset-bottom));
+  min-height: 100vh;
 }
 
 .panel {
@@ -20,8 +26,10 @@ h1 {
 }
 
 #preview {
-  width: 192px;
-  height: 192px;
+  width: 100%;
+  max-width: 220px;
+  aspect-ratio: 1 / 1;
+  height: auto;
   image-rendering: pixelated;
   background: #000;
   border-radius: 8px;
@@ -33,7 +41,7 @@ h1 {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin: 16px 0;
+  margin: 16px 0 20px;
   font-size: 13px;
   color: #9aa0a6;
 }
@@ -43,27 +51,32 @@ h1 {
   height: 8px;
   border-radius: 50%;
   background: #ff4d4d;
+  flex-shrink: 0;
 }
 .dot.connected {
   background: #3ed6c0;
 }
 
 .modes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  margin-bottom: 24px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 28px;
 }
 
 .mode-btn {
   background: #1c2024;
   color: #e8e6e1;
   border: 1px solid #2a2f34;
-  border-radius: 6px;
-  padding: 8px 14px;
-  font-size: 13px;
+  border-radius: 8px;
+  padding: 14px 10px;
+  font-size: 15px;
   cursor: pointer;
+  min-height: 48px;   /* comfortable tap target */
+  -webkit-tap-highlight-color: transparent;
+}
+.mode-btn:active {
+  background: #22272b;
 }
 .mode-btn.active {
   border-color: #ffb020;
@@ -74,8 +87,18 @@ h1 {
   display: block;
   font-size: 13px;
   color: #9aa0a6;
+  text-align: left;
 }
 .brightness input {
   width: 100%;
-  margin-top: 8px;
+  margin-top: 10px;
+  height: 32px;    /* easier to grab on touch */
+}
+
+/* Slightly larger tap targets / text on small phones */
+@media (max-width: 380px) {
+  .mode-btn {
+    font-size: 14px;
+    padding: 14px 6px;
+  }
 }
