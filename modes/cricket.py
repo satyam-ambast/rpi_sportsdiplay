@@ -37,6 +37,7 @@ from services.cricket_screens import (
     create_scorecard_image,
     create_batting_scorecard_image,
     create_bowling_scorecard_image,
+    create_standby_image
 )
 
 # (step name, seconds to display before advancing to the next step)
@@ -151,7 +152,7 @@ class CricketMode(Mode):
 
         if not self._active_matches:
             self.poll_interval = NO_MATCH_RETRY_SECONDS
-            return _placeholder_frame("NO LIVE", "MATCH")
+            return create_standby_image("NO LIVE MATCH")
 
         match_id = self._active_matches[self._match_cursor]
         state = self._match_state.setdefault(match_id, {"data": None, "last_overs": None})
@@ -164,7 +165,7 @@ class CricketMode(Mode):
                 log.warning(f"Cricket: fetch failed for {match_id}: {e}")
                 self._drop_current_match()
                 self.poll_interval = FAILED_MATCH_RETRY_SECONDS
-                return _placeholder_frame("MATCH", "ENDED")
+                return create_standby_image("MATCH  ENDED")
 
             new_overs = new_data.get("overs", "0")
             if state["data"] is None or compare_overs(state["last_overs"] or "0", new_overs):
@@ -181,7 +182,7 @@ class CricketMode(Mode):
         
 
         if step_name == "main":
-            create_scorecard_image(
+            frame=create_scorecard_image(
                 team1=data["team1"],
                 team2=data["team2"],
                 score=data["score"],
@@ -197,23 +198,23 @@ class CricketMode(Mode):
                 target=data.get("target"),
                 filename="scoreboard_live.png",
             )
-            frame = Image.open("scoreboard_live.png").convert("RGB")
+            #frame = Image.open("scoreboard_live.png").convert("RGB")
 
         elif step_name == "batting":
-            create_batting_scorecard_image(
+            frame=create_batting_scorecard_image(
                 striker=data["striker"],
                 non_striker=data["non_striker"],
                 filename="batter_live.png",
             )
-            frame = Image.open("batter_live.png").convert("RGB")
+            #frame = Image.open("batter_live.png").convert("RGB")
 
         else:  # "bowling"
-            create_bowling_scorecard_image(
+            frame=create_bowling_scorecard_image(
                 bowler1=data["bowler"],
                 bowler2=data["second_bowler"],
                 filename="bowler_live.png",
             )
-            frame = Image.open("bowler_live.png").convert("RGB")
+            #frame = Image.open("bowler_live.png").convert("RGB")
 
         # Advance within the current match's sequence; once it's finished,
         # move on to the next match in the rotation.

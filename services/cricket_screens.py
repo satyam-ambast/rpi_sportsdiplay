@@ -119,7 +119,7 @@ def create_scorecard_image(
         blit_text(img, x, y, text, color, spacing=1)
         y += row_h + gap
 
-    img.save(filename, "PNG")
+    #img.save(filename, "PNG")
     return img
 
 def create_batting_scorecard_image(striker,non_striker,
@@ -179,7 +179,7 @@ def create_batting_scorecard_image(striker,non_striker,
         blit_text(img, x, y, text, color, spacing=1)
         y += row_h + gap
 
-    img.save(filename, "PNG")
+    #img.save(filename, "PNG")
     return img
 
 
@@ -240,7 +240,46 @@ def create_bowling_scorecard_image(bowler1,bowler2,
         blit_text(img, x, y, text, color, spacing=1)
         y += row_h + gap
 
-    img.save(filename, "PNG")
+    #img.save(filename, "PNG")
+    return img
+
+
+def create_standby_image(text,text_color=(100,255,120),size=32,
+    bg_color=(0, 0, 0),):
+    
+    img = Image.new("RGB", (size, size), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    rows = []
+
+    display_text=""
+    for chunk in text.split(' '):
+        display_text+=chunk
+        if text_width(display_text)>=15:
+            rows.append((display_text,text_color))
+            display_text=""
+        else:
+            display_text+="  "
+
+    row_h = GLYPH_H
+    gap = 3
+    total_h = row_h * len(rows) + gap * (len(rows) - 1)
+    start_y = (size - total_h) // 2
+
+    y = start_y
+
+
+    # -----------------------------
+    # Draw text
+    # -----------------------------
+    y = start_y
+    for text, color in rows:
+        w = text_width(text, spacing=1)
+        x = max(0, (size - w) // 2)
+        blit_text(img, x, y, text, color, spacing=1)
+        y += row_h + gap
+
+    img.save("trial.png", "PNG")
     return img
 
 
