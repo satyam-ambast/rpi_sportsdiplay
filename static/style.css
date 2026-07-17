@@ -95,6 +95,68 @@ h1 {
   height: 32px;    /* easier to grab on touch */
 }
 
+.team-field {
+  display: block;
+  font-size: 13px;
+  color: #9aa0a6;
+  text-align: left;
+  margin-top: 20px;
+}
+
+.team-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.team-row input {
+  flex: 1;
+  min-width: 0;
+  background: #1c2024;
+  border: 1px solid #2a2f34;
+  border-radius: 6px;
+  color: #e8e6e1;
+  padding: 10px;
+  font-size: 15px;
+  text-transform: uppercase;
+}
+
+.team-row button {
+  background: #1c2024;
+  border: 1px solid #2a2f34;
+  border-radius: 6px;
+  color: #ffb020;
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  color: #9aa0a6;
+  margin: 24px 0 8px;
+}
+
+.log {
+  background: #0e1013;
+  border: 1px solid #2a2f34;
+  border-radius: 6px;
+  padding: 10px;
+  height: 160px;
+  overflow-y: auto;
+  text-align: left;
+  font-family: "SF Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9aa0a6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Slightly larger tap targets / text on small phones */
 @media (max-width: 380px) {
   .mode-btn {

@@ -1,5 +1,5 @@
 from PIL import Image,ImageDraw
-from pixel_font import blit_text, text_width, GLYPH_H
+from services.pixel_font import blit_text, text_width, GLYPH_H
 
 
 def create_scorecard_image(
@@ -30,6 +30,20 @@ def create_scorecard_image(
     """
     Renders a 32x32 cricket scorecard badge.
     """
+    if len(team1)>3:
+        team1=team1[0:3]
+
+    if len(team2)>3:
+        team2=team2[0:3]
+
+    if bat_team!=None and len(bat_team)>3:
+        bat_team=bat_team[0:3]
+    if bowl_team!=None and len(bowl_team)>3:
+        bowl_team=bowl_team[0:3]
+
+
+
+
 
     img = Image.new("RGB", (size, size), bg_color)
     draw = ImageDraw.Draw(img)

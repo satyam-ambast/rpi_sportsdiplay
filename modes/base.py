@@ -6,12 +6,16 @@ with whatever fetches/draws you want for each sport. For now it just
 returns a plain placeholder frame so the app runs end-to-end.
 """
 from PIL import Image
+from applog import log
 
 
 class Mode:
     key: str = "base"          # unique id used in the UI/URLs
     label: str = "Base"        # human-readable name shown as a button
-    poll_interval: int = 20    # seconds between refreshes while this mode is active
+    poll_interval: int = 20    # seconds before the next render(); a mode
+                                # may reassign self.poll_interval inside
+                                # render() to change its own next delay
+                                # (used by CricketMode's frame rotation)
 
     def render(self) -> Image.Image:
         """
@@ -25,5 +29,5 @@ class Mode:
         try:
             return self.render()
         except Exception as e:
-            print(f"[{self.key}] render failed: {e}")
+            log.error(f"[{self.key}] render failed: {e}")
             return Image.new("RGB", (32, 32), (40, 0, 0))

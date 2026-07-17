@@ -533,8 +533,8 @@ def fetch_match_score(match_id):
     if m:
         team1 = m.group(1)
         team2 = m.group(2)
-        print(team1)  # WAF
-        print(team2)  # LAKR
+        # print(team1)  # WAF
+        # print(team2)  # LAKR
     else:
         raise Exception("Team not found")
 
@@ -633,16 +633,9 @@ def get_match_details_for_team(team):
 
     for match_id in ids:
         data = fetch_match_score(match_id)
-        if data['team1']==team or data['team2']==team:
+        if (data['team1']==team or data['team2']==team) and data['state'].lower()!='preview':
             return match_id
 
 def get_scorecard_by_id(match_id):
     data = fetch_match_score(match_id)
     return data
-
-
-# matchid=get_match_details_for_team("INDW")
-# get_scorecard_by_id(matchid)
-
-matchid=get_match_details_for_team("INDW")
-print(get_scorecard_by_id(matchid))

@@ -11,11 +11,14 @@ on its next loop iteration.
 import threading
 import time
 import io
+import os
+import tempfile
 
 import pypixelcolor
 
 import config
 from modes import MODES
+from applog import log
 
 
 class DeviceController:
@@ -36,6 +39,11 @@ class DeviceController:
         self._force_refresh = threading.Event()
         self._thread = threading.Thread(target=self._worker, daemon=True)
 
+        # Cross-platform scratch file for the frame we send each cycle.
+        # (A hardcoded "/tmp/..." path doesn't exist on Windows -- that
+        # was previously causing every send to fail right after connecting.)
+        self._frame_path = os.path.join(tempfile.gettempdir(), "ipixel_frame.png")
+
     # ---- public API, called from Flask routes ----
 
     def start(self):
@@ -48,18 +56,22 @@ class DeviceController:
     def set_mode(self, key):
         if key not in MODES:
             raise ValueError(f"Unknown mode: {key}")
+        log.info(f"Mode change requested: {self.current_mode_key} -> {key}")
         with self._lock:
             self.current_mode_key = key
         self._force_refresh.set()  # render immediately instead of waiting for poll_interval
 
     def set_brightness(self, value):
         value = max(0, min(100, int(value)))
+        log.info(f"Brightness change requested: {value}")
         with self._lock:
             self.brightness = value
         if self.client and self.connected:
             try:
                 self.client.set_brightness(value)
+                log.debug(f"Brightness set on device: {value}")
             except Exception as e:
+                log.error(f"Failed to set brightness: {e}")
                 self.last_error = str(e)
 
     def get_status(self):
@@ -80,16 +92,20 @@ class DeviceController:
     # ---- worker thread ----
 
     def _connect(self):
+        log.info(f"Connecting to {self.address} ...")
         self.client = pypixelcolor.Client(self.address)
         self.client.connect()
         self.client.set_brightness(self.brightness)
         self.connected = True
         self.last_error = None
+        log.info("Connected.")
 
     def _worker(self):
+        log.info("Worker thread started.")
         try:
             self._connect()
         except Exception as e:
+            log.error(f"Initial connect failed: {e}")
             self.last_error = f"Connect failed: {e}"
             self.connected = False  # loop below will keep retrying
 
@@ -99,6 +115,7 @@ class DeviceController:
                 try:
                     self._connect()
                 except Exception as e:
+                    log.warning(f"Reconnect failed, retrying in 5s: {e}")
                     self.last_error = f"Reconnect failed: {e}"
                     time.sleep(5)
                     continue
@@ -110,13 +127,14 @@ class DeviceController:
             due = now >= next_render_at or self._force_refresh.is_set()
             if due:
                 self._force_refresh.clear()
+                log.debug(f"Rendering frame for mode '{mode.key}'")
                 try:
                     frame = mode.safe_render()
 
                     buf = io.BytesIO()
                     frame.save(buf, format="PNG")
 
-                    frame_path = "/tmp/ipixel_frame.png"
+                    frame_path = self._frame_path
                     frame.save(frame_path)
                     self.client.send_image(frame_path, resize_method="fit")
 
@@ -124,7 +142,9 @@ class DeviceController:
                         self.last_frame_bytes = buf.getvalue()
                         self.last_update = time.strftime("%H:%M:%S")
                     self.last_error = None
+                    log.debug(f"Frame sent OK for mode '{mode.key}'")
                 except Exception as e:
+                    log.error(f"Send failed for mode '{mode.key}': {e}")
                     self.last_error = str(e)
                     self.connected = False  # force reconnect next loop
 
@@ -132,8 +152,10 @@ class DeviceController:
 
             time.sleep(1)
 
+        log.info("Worker thread stopping.")
         if self.client and self.connected:
             try:
                 self.client.disconnect()
-            except Exception:
-                pass
+                log.info("Disconnected cleanly.")
+            except Exception as e:
+                log.warning(f"Error during disconnect: {e}")

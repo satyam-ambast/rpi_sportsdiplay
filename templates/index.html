@@ -27,6 +27,17 @@
       Brightness
       <input type="range" id="brightness" min="0" max="100" value="60">
     </label>
+
+    <label class="team-field">
+      Cricket teams (comma-separated)
+      <div class="team-row">
+        <input type="text" id="cricket-team" placeholder="IND, ENG, AUS">
+        <button id="team-save">Set</button>
+      </div>
+    </label>
+
+    <h2>Log</h2>
+    <pre id="log" class="log"></pre>
   </main>
 
   <script>
@@ -64,7 +75,40 @@
       });
     });
 
+    async function refreshLogs() {
+      const res = await fetch('/api/logs');
+      const lines = await res.json();
+      const el = document.getElementById('log');
+      const wasAtBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+
+      el.textContent = lines
+        .map(l => `${l.time} [${l.level}] ${l.message}`)
+        .join('\n');
+
+      if (wasAtBottom) el.scrollTop = el.scrollHeight;
+    }
+
+    async function loadCricketTeam() {
+      const res = await fetch('/api/cricket/teams');
+      const data = await res.json();
+      document.getElementById('cricket-team').value = data.teams.join(', ');
+    }
+
+    document.getElementById('team-save').addEventListener('click', async () => {
+      const teams = document.getElementById('cricket-team').value;
+      const res = await fetch('/api/cricket/teams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teams }),
+      });
+      const data = await res.json();
+      if (data.ok) document.getElementById('cricket-team').value = data.teams.join(', ');
+    });
+
     setInterval(refreshStatus, 3000);
+    setInterval(refreshLogs, 2000);
+    refreshLogs();
+    loadCricketTeam();
     setInterval(() => {
       document.getElementById('preview').src = '/preview.png?t=' + Date.now();
     }, 5000);
