@@ -5,7 +5,7 @@ match selection, and pinning to a single view (score/batting/bowling).
 Depends on your own scraper/rendering modules in services/:
     - services/cricbuzz_scraper.py  (get_match_details_for_team, get_scorecard_by_id)
     - services/cricket_screens.py   (create_scorecard_image, create_batting_scorecard_image,
-                                      create_bowling_scorecard_image)
+                                      create_bowling_scorecard_image, create_standby_image)
 
 Three independent things are happening here, on purpose:
 
@@ -33,7 +33,7 @@ Three independent things are happening here, on purpose:
 """
 import time
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from modes.base import Mode
 from applog import log
@@ -44,6 +44,7 @@ from services.cricket_screens import (
     create_scorecard_image,
     create_batting_scorecard_image,
     create_bowling_scorecard_image,
+    create_standby_image,
 )
 
 VIEWS = ("main", "batting", "bowling")
@@ -77,16 +78,6 @@ def compare_overs(current, new):
     new_balls = to_balls(new)
     log.debug(f"Cricket: compare_overs current={current_balls} new={new_balls}")
     return new_balls >= current_balls
-
-
-def _placeholder_frame(line1, line2=""):
-    img = Image.new("RGB", (32, 32), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
-    draw.text((2, 10), line1, fill=(120, 120, 130), font=font)
-    if line2:
-        draw.text((2, 19), line2, fill=(120, 120, 130), font=font)
-    return img
 
 
 class CricketMode(Mode):
@@ -223,9 +214,9 @@ class CricketMode(Mode):
 
     def _draw(self, view, data):
         if view == "main":
-            create_scorecard_image(
-                team1=data["team1"].replace("W", ""),
-                team2=data["team2"].replace("W", ""),
+            return create_scorecard_image(
+                team1=data["team1"],
+                team2=data["team2"],
                 score=data["score"],
                 overs=data["overs"],
                 inns=data.get("innings_id", 1),
@@ -239,22 +230,19 @@ class CricketMode(Mode):
                 target=data.get("target"),
                 filename="scoreboard_live.png",
             )
-            return Image.open("scoreboard_live.png").convert("RGB")
 
         if view == "batting":
-            create_batting_scorecard_image(
+            return create_batting_scorecard_image(
                 striker=data["striker"],
                 non_striker=data["non_striker"],
                 filename="batter_live.png",
             )
-            return Image.open("batter_live.png").convert("RGB")
 
-        create_bowling_scorecard_image(
+        return create_bowling_scorecard_image(
             bowler1=data["bowler"],
             bowler2=data["second_bowler"],
             filename="bowler_live.png",
         )
-        return Image.open("bowler_live.png").convert("RGB")
 
     def render(self) -> Image.Image:
         now = time.time()
@@ -265,18 +253,18 @@ class CricketMode(Mode):
         match_id = self._pick_match_id()
         if match_id is None:
             self.poll_interval = NO_MATCH_RETRY_SECONDS
-            return _placeholder_frame("NO LIVE", "MATCH")
+            return create_standby_image("NO LIVE MATCH")
 
         state = self._match_state.setdefault(match_id, {"data": None, "last_overs": None, "last_fetch_time": 0})
 
         if not self._refresh_data(match_id, state, now):
             self._drop_match(match_id)
             self.poll_interval = FAILED_MATCH_RETRY_SECONDS
-            return _placeholder_frame("MATCH", "ENDED")
+            return create_standby_image("MATCH ENDED")
 
         if state["data"] is None:
             self.poll_interval = FAILED_MATCH_RETRY_SECONDS
-            return _placeholder_frame("LOADING", "...")
+            return create_standby_image("LOADING...")
 
         # Which view to draw, and how long to leave it up
         if self.forced_view:

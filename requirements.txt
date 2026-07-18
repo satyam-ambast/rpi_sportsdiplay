@@ -1,3 +1,4 @@
 flask
 pypixelcolor
 pillow
+requests
