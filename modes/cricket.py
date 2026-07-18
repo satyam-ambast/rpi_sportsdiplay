@@ -219,15 +219,21 @@ class CricketMode(Mode):
                 team2=data["team2"],
                 score=data["score"],
                 overs=data["overs"],
-                inns=data.get("innings_id", 1),
-                match_type=data.get("match_format", "T"),
-                day=data.get("day_number"),
-                trail=data.get("trail"),
-                lead=data.get("lead"),
+                # create_scorecard_image does direct numeric comparisons
+                # (e.g. `trail > 0`) and `.lower()` on state -- coerce
+                # None to a safe default here rather than passing it
+                # through, since a scraped field being present-but-None
+                # (e.g. no lead/trail yet in the first innings) would
+                # otherwise crash inside their comparisons.
+                inns=data.get("innings_id") or 1,
+                match_type=data.get("match_format") or "L",
+                day=data.get("day_number") or 1,
+                trail=data.get("trail") or 0,
+                lead=data.get("lead") or 0,
                 bat_team=data.get("batting_team_short"),
                 bowl_team=data.get("bowling_team_short"),
-                state=data.get("state"),
-                target=data.get("target"),
+                state=data.get("state") or "",
+                target=data.get("target") or 0,
                 filename="scoreboard_live.png",
             )
 
