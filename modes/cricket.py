@@ -1,31 +1,38 @@
 """
-Live cricket score mode, supporting multiple followed teams.
+Live cricket score mode, supporting multiple followed teams, manual
+match selection, and pinning to a single view (score/batting/bowling).
 
 Depends on your own scraper/rendering modules in services/:
     - services/cricbuzz_scraper.py  (get_match_details_for_team, get_scorecard_by_id)
     - services/cricket_screens.py   (create_scorecard_image, create_batting_scorecard_image,
                                       create_bowling_scorecard_image)
 
-How multi-team cycling works:
-  - self.teams is a list (e.g. ["IND", "ENG", "AUS"]).
-  - Each team is resolved to a match id. If two followed teams are
-    playing each other, they resolve to the same match id and it's
-    only shown once (deduped into self._active_matches).
-  - The rotation is two nested loops: for the current match, cycle its
-    own main(20s) -> batting(10s) -> bowling(10s) -> main(30s) sequence
-    same as before; once that finishes, move to the next match in
-    self._active_matches. After the last match, wrap back to the first
-    AND re-resolve every team's match id (picks up new matches
-    starting, teams finishing, etc).
-  - Each match keeps its own cached data + last_overs, gated by
-    compare_overs, so matches don't interfere with each other's state.
-  - If a fetch fails for the match currently on screen (e.g. it just
-    ended), that match is dropped from the rotation and we move on to
-    the next one, rather than getting stuck retrying it forever.
-  - If none of the followed teams have a live match, a small "no live
-    match" placeholder is shown and match resolution is retried on a
-    slower cadence instead of hammering the lookup.
+Three independent things are happening here, on purpose:
+
+1. WHICH MATCHES EXIST: self.teams (a list) each resolve to a match id.
+   Two followed teams playing each other dedupe to one match. Refreshed
+   on a slow timer (config.CRICKET_MATCH_REFRESH_SECONDS) independent
+   of everything else below.
+
+2. WHAT DATA A MATCH HAS: each match's scorecard is refetched on its
+   own fast timer (config.CRICKET_SCORE_REFRESH_SECONDS), gated by
+   compare_overs so a stale/glitched scrape can't overwrite good data.
+   This is decoupled from which sub-view is on screen -- data can keep
+   refreshing underneath even while pinned to one view.
+
+3. WHAT'S ON SCREEN RIGHT NOW: normally auto-cycles through all active
+   matches (main->batting->bowling->main each, 20/10/10/30s). You can
+   override this two ways, independently:
+     - set_forced_match(match_id): pin to one specific match instead of
+       cycling through all of them. Pass None to go back to auto.
+     - set_forced_view(view): pin to one specific sub-view ("main",
+       "batting", or "bowling") instead of cycling through all three.
+       Pass None to go back to cycling.
+   Both together = single match, single view, permanently (until
+   changed or that match ends).
 """
+import time
+
 from PIL import Image, ImageDraw, ImageFont
 
 from modes.base import Mode
@@ -37,10 +44,11 @@ from services.cricket_screens import (
     create_scorecard_image,
     create_batting_scorecard_image,
     create_bowling_scorecard_image,
-    create_standby_image
 )
 
-# (step name, seconds to display before advancing to the next step)
+VIEWS = ("main", "batting", "bowling")
+
+# (view, seconds to display before advancing) -- used only in auto-cycle mode
 SEQUENCE = [
     ("main", 20),
     ("batting", 10),
@@ -89,11 +97,15 @@ class CricketMode(Mode):
     def __init__(self):
         self.teams = list(config.CRICKET_TEAMS)
         self._active_matches = []      # ordered, deduped list of match ids
-        self._match_state = {}         # match_id -> {"data":..., "last_overs":...}
-        self._match_cursor = 0         # which match in _active_matches is showing
-        self._step_index = 0           # which sub-step within that match's SEQUENCE
+        self._match_state = {}         # match_id -> {"data", "last_overs", "last_fetch_time"}
+        self._match_cursor = 0         # which match in _active_matches is showing (auto mode)
+        self._step_index = 0           # which SEQUENCE step is showing (auto mode)
+        self._last_resolve_time = 0    # for the time-based re-resolve floor
 
-    # ---- public API, called from the /api/cricket/teams route ----
+        self.forced_match_id = None    # set via set_forced_match(); None = auto-cycle matches
+        self.forced_view = None        # set via set_forced_view(); None = auto-cycle views
+
+    # ---- public API, called from the /api/cricket/* routes ----
 
     def set_teams(self, teams):
         if isinstance(teams, str):
@@ -106,7 +118,34 @@ class CricketMode(Mode):
         self._match_state = {}
         self._match_cursor = 0
         self._step_index = 0
+        self._last_resolve_time = 0
         log.info(f"Cricket: now following {self.teams}")
+
+    def set_forced_match(self, match_id):
+        """Pin display to one specific match id, or None to resume auto-cycling matches."""
+        self.forced_match_id = match_id or None
+        self._step_index = 0
+        log.info(f"Cricket: forced match = {self.forced_match_id or 'auto'}")
+
+    def set_forced_view(self, view):
+        """Pin display to one specific view ('main'/'batting'/'bowling'), or None for auto-cycle."""
+        if view and view not in VIEWS:
+            raise ValueError(f"view must be one of {VIEWS} or empty")
+        self.forced_view = view or None
+        log.info(f"Cricket: forced view = {self.forced_view or 'auto'}")
+
+    def list_matches(self):
+        """Lightweight match list for a UI picker: id + whatever data is cached so far."""
+        out = []
+        for mid in self._active_matches:
+            data = self._match_state.get(mid, {}).get("data")
+            if data:
+                label = f"{data.get('team1', '?')} vs {data.get('team2', '?')}"
+                score = f"{data.get('score', '')} ({data.get('overs', '')} ov)"
+            else:
+                label, score = mid, "loading..."
+            out.append({"match_id": mid, "label": label, "score": score})
+        return out
 
     # ---- internals ----
 
@@ -114,7 +153,6 @@ class CricketMode(Mode):
         """Look up each followed team's current match id and dedupe into a rotation list."""
         active = []
         for team in self.teams:
-            print(team)
             try:
                 match_id = get_match_details_for_team(team)
             except Exception as e:
@@ -126,65 +164,68 @@ class CricketMode(Mode):
         self._active_matches = active
         # drop cached state for matches no longer active
         self._match_state = {mid: s for mid, s in self._match_state.items() if mid in active}
-        self._match_cursor = 0
-        self._step_index = 0
+        if self._match_cursor >= len(active):
+            self._match_cursor = 0
+        self._last_resolve_time = time.time()
         log.info(f"Cricket: active matches = {self._active_matches or 'none'}")
 
-    def _drop_current_match(self):
-        """Remove the currently-showing match from rotation (e.g. it just ended)."""
-        if not self._active_matches:
-            return
-        dead = self._active_matches[self._match_cursor]
-        log.warning(f"Cricket: dropping match {dead} from rotation (fetch failed)")
-        self._active_matches.pop(self._match_cursor)
-        self._match_state.pop(dead, None)
-        if self._active_matches:
-            self._match_cursor %= len(self._active_matches)
-        else:
-            self._match_cursor = 0
-        self._step_index = 0
-
-    def render(self) -> Image.Image:
-        # Resolve (or re-resolve) matches whenever we don't have any yet,
-        # or we've wrapped back around to the start of a full cycle.
-        if not self._active_matches or (self._match_cursor == 0 and self._step_index == 0):
-            self._resolve_matches()
-
-        if not self._active_matches:
-            self.poll_interval = NO_MATCH_RETRY_SECONDS
-            return create_standby_image("NO LIVE MATCH")
-
-        match_id = self._active_matches[self._match_cursor]
-        state = self._match_state.setdefault(match_id, {"data": None, "last_overs": None})
-        step_name, duration = SEQUENCE[self._step_index]
-
-        if self._step_index == 0 or state["data"] is None:
-            try:
-                new_data = get_scorecard_by_id(match_id)
-            except Exception as e:
-                log.warning(f"Cricket: fetch failed for {match_id}: {e}")
-                self._drop_current_match()
-                self.poll_interval = FAILED_MATCH_RETRY_SECONDS
-                return create_standby_image("MATCH  ENDED")
-
-            new_overs = new_data.get("overs", "0")
-            if state["data"] is None or compare_overs(state["last_overs"] or "0", new_overs):
-                state["data"] = new_data
-                state["last_overs"] = new_overs
-                log.info(f"Cricket: {match_id} updated, overs={new_overs}")
+    def _drop_match(self, match_id):
+        """Remove a match from rotation (e.g. it just ended) and recover gracefully."""
+        log.warning(f"Cricket: dropping match {match_id} from rotation (fetch failed)")
+        if match_id in self._active_matches:
+            idx = self._active_matches.index(match_id)
+            self._active_matches.pop(idx)
+            if self._match_cursor > idx:
+                self._match_cursor -= 1
+            elif self._active_matches:
+                self._match_cursor %= len(self._active_matches)
             else:
-                log.debug(
-                    f"Cricket: {match_id} overs did not progress "
-                    f"({state['last_overs']} -> {new_overs}), keeping cached data"
-                )
+                self._match_cursor = 0
+        self._match_state.pop(match_id, None)
+        self._step_index = 0
+        if self.forced_match_id == match_id:
+            log.warning("Cricket: forced match ended, reverting to auto-cycle")
+            self.forced_match_id = None
 
-        data = state["data"]
-        
+    def _pick_match_id(self):
+        """Which match should be on screen right now, given forced/auto state."""
+        if self.forced_match_id and self.forced_match_id in self._active_matches:
+            return self.forced_match_id
+        if not self._active_matches:
+            return None
+        self._match_cursor %= len(self._active_matches)
+        return self._active_matches[self._match_cursor]
 
-        if step_name == "main":
-            frame=create_scorecard_image(
-                team1=data["team1"],
-                team2=data["team2"],
+    def _refresh_data(self, match_id, state, now):
+        """Refetch this match's scorecard if it's due, gated by compare_overs."""
+        due = state["data"] is None or (now - state["last_fetch_time"]) >= config.CRICKET_SCORE_REFRESH_SECONDS
+        if not due:
+            return True  # cached data is still fresh enough, nothing to do
+
+        try:
+            new_data = get_scorecard_by_id(match_id)
+        except Exception as e:
+            log.warning(f"Cricket: fetch failed for {match_id}: {e}")
+            return False
+
+        state["last_fetch_time"] = now
+        new_overs = new_data.get("overs", "0")
+        if state["data"] is None or compare_overs(state["last_overs"] or "0", new_overs):
+            state["data"] = new_data
+            state["last_overs"] = new_overs
+            log.info(f"Cricket: {match_id} updated, overs={new_overs}")
+        else:
+            log.debug(
+                f"Cricket: {match_id} overs did not progress "
+                f"({state['last_overs']} -> {new_overs}), keeping cached data"
+            )
+        return True
+
+    def _draw(self, view, data):
+        if view == "main":
+            create_scorecard_image(
+                team1=data["team1"].replace("W", ""),
+                team2=data["team2"].replace("W", ""),
                 score=data["score"],
                 overs=data["overs"],
                 inns=data.get("innings_id", 1),
@@ -198,30 +239,62 @@ class CricketMode(Mode):
                 target=data.get("target"),
                 filename="scoreboard_live.png",
             )
-            #frame = Image.open("scoreboard_live.png").convert("RGB")
+            return Image.open("scoreboard_live.png").convert("RGB")
 
-        elif step_name == "batting":
-            frame=create_batting_scorecard_image(
+        if view == "batting":
+            create_batting_scorecard_image(
                 striker=data["striker"],
                 non_striker=data["non_striker"],
                 filename="batter_live.png",
             )
-            #frame = Image.open("batter_live.png").convert("RGB")
+            return Image.open("batter_live.png").convert("RGB")
 
-        else:  # "bowling"
-            frame=create_bowling_scorecard_image(
-                bowler1=data["bowler"],
-                bowler2=data["second_bowler"],
-                filename="bowler_live.png",
-            )
-            #frame = Image.open("bowler_live.png").convert("RGB")
+        create_bowling_scorecard_image(
+            bowler1=data["bowler"],
+            bowler2=data["second_bowler"],
+            filename="bowler_live.png",
+        )
+        return Image.open("bowler_live.png").convert("RGB")
 
-        # Advance within the current match's sequence; once it's finished,
-        # move on to the next match in the rotation.
+    def render(self) -> Image.Image:
+        now = time.time()
+
+        if not self._active_matches or (now - self._last_resolve_time) >= config.CRICKET_MATCH_REFRESH_SECONDS:
+            self._resolve_matches()
+
+        match_id = self._pick_match_id()
+        if match_id is None:
+            self.poll_interval = NO_MATCH_RETRY_SECONDS
+            return _placeholder_frame("NO LIVE", "MATCH")
+
+        state = self._match_state.setdefault(match_id, {"data": None, "last_overs": None, "last_fetch_time": 0})
+
+        if not self._refresh_data(match_id, state, now):
+            self._drop_match(match_id)
+            self.poll_interval = FAILED_MATCH_RETRY_SECONDS
+            return _placeholder_frame("MATCH", "ENDED")
+
+        if state["data"] is None:
+            self.poll_interval = FAILED_MATCH_RETRY_SECONDS
+            return _placeholder_frame("LOADING", "...")
+
+        # Which view to draw, and how long to leave it up
+        if self.forced_view:
+            view = self.forced_view
+            duration = config.CRICKET_SCORE_REFRESH_SECONDS
+        else:
+            view, duration = SEQUENCE[self._step_index]
+
+        frame = self._draw(view, state["data"])
+
+        # Advance the auto-cycle position, even if forced settings mean it's
+        # not currently being used -- so switching a forced setting off
+        # resumes from a sane place instead of a stale index.
         self._step_index += 1
         if self._step_index >= len(SEQUENCE):
             self._step_index = 0
-            self._match_cursor = (self._match_cursor + 1) % len(self._active_matches)
+            if not self.forced_match_id and self._active_matches:
+                self._match_cursor = (self._match_cursor + 1) % len(self._active_matches)
 
         self.poll_interval = duration
         return frame

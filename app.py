@@ -64,6 +64,36 @@ def cricket_teams():
         return jsonify({"ok": False, "error": str(e)}), 400
 
 
+@app.route("/api/cricket/matches")
+def cricket_matches():
+    cricket_mode = MODES["cricket"]
+    return jsonify({
+        "matches": cricket_mode.list_matches(),
+        "forced_match_id": cricket_mode.forced_match_id,
+        "forced_view": cricket_mode.forced_view,
+    })
+
+
+@app.route("/api/cricket/select", methods=["POST"])
+def cricket_select():
+    cricket_mode = MODES["cricket"]
+    body = request.get_json(silent=True) or request.form
+
+    try:
+        if "match_id" in body:
+            cricket_mode.set_forced_match(body.get("match_id"))
+        if "view" in body:
+            cricket_mode.set_forced_view(body.get("view"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    return jsonify({
+        "ok": True,
+        "forced_match_id": cricket_mode.forced_match_id,
+        "forced_view": cricket_mode.forced_view,
+    })
+
+
 @app.route("/api/logs")
 def logs():
     return jsonify(get_recent_logs())

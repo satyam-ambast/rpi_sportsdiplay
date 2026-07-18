@@ -36,6 +36,23 @@
       </div>
     </label>
 
+    <label class="team-field">
+      Cricket match
+      <select id="cricket-match">
+        <option value="">Auto (cycle all live matches)</option>
+      </select>
+    </label>
+
+    <label class="team-field">
+      Cricket view
+      <select id="cricket-view">
+        <option value="">Auto (cycle score/batting/bowling)</option>
+        <option value="main">Score only</option>
+        <option value="batting">Batting only</option>
+        <option value="bowling">Bowling only</option>
+      </select>
+    </label>
+
     <h2>Log</h2>
     <pre id="log" class="log"></pre>
   </main>
@@ -105,7 +122,49 @@
       if (data.ok) document.getElementById('cricket-team').value = data.teams.join(', ');
     });
 
+    async function refreshCricketMatches() {
+      const res = await fetch('/api/cricket/matches');
+      const data = await res.json();
+
+      const select = document.getElementById('cricket-match');
+      const wasFocused = document.activeElement === select;
+      if (!wasFocused) {
+        select.innerHTML = '<option value="">Auto (cycle all live matches)</option>';
+        data.matches.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.match_id;
+          opt.textContent = `${m.label} — ${m.score}`;
+          select.appendChild(opt);
+        });
+        select.value = data.forced_match_id || '';
+      }
+
+      const viewSelect = document.getElementById('cricket-view');
+      if (document.activeElement !== viewSelect) {
+        viewSelect.value = data.forced_view || '';
+      }
+    }
+
+    async function selectCricket(partial) {
+      const res = await fetch('/api/cricket/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(partial),
+      });
+      return res.json();
+    }
+
+    document.getElementById('cricket-match').addEventListener('change', (e) => {
+      selectCricket({ match_id: e.target.value });
+    });
+
+    document.getElementById('cricket-view').addEventListener('change', (e) => {
+      selectCricket({ view: e.target.value });
+    });
+
     setInterval(refreshStatus, 3000);
+    setInterval(refreshCricketMatches, 5000);
+    refreshCricketMatches();
     setInterval(refreshLogs, 2000);
     refreshLogs();
     loadCricketTeam();
