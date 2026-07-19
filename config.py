@@ -32,6 +32,11 @@ WEATHER_LON = float(os.environ.get("WEATHER_LON", "13.41"))
 WEATHER_UNIT = os.environ.get("WEATHER_UNIT", "celsius")        # "celsius" or "fahrenheit"
 WEATHER_REFRESH_SECONDS = int(os.environ.get("WEATHER_REFRESH_SECONDS", "600"))  # weather is slow-moving
 
+# --- Formula 1 (FastF1) -----------------------------------------------------
+F1_CACHE_DIR = os.environ.get("F1_CACHE_DIR", os.path.join(os.path.dirname(__file__), ".fastf1_cache"))
+F1_SESSION_REFRESH_SECONDS = int(os.environ.get("F1_SESSION_REFRESH_SECONDS", "60"))
+F1_PAGE_SECONDS = int(os.environ.get("F1_PAGE_SECONDS", "6"))  # how long each 3-driver page stays up
+
 # --- Server -----------------------------------------------------------------
 FLASK_HOST = "0.0.0.0"
 FLASK_PORT = 5000

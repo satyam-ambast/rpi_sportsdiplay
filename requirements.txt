@@ -2,3 +2,5 @@ flask
 pypixelcolor
 pillow
 requests
+fastf1
+pandas
