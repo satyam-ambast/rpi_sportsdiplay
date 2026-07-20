@@ -53,8 +53,32 @@
       </select>
     </label>
 
+    <h2>Device</h2>
+    <label class="team-field">
+      BLE address
+      <div class="team-row">
+        <input type="text" id="ble-address" placeholder="AA:BB:CC:DD:EE:FF">
+        <button id="ble-connect">Connect</button>
+      </div>
+    </label>
+    <div class="ble-actions">
+      <button id="ble-disconnect" class="secondary-btn">Disconnect</button>
+      <button id="ble-scan" class="secondary-btn">Scan for devices</button>
+    </div>
+    <div id="ble-scan-status" class="ble-scan-status"></div>
+    <div id="ble-results" class="ble-results"></div>
+
+    <h2>Weather location</h2>
+    <div class="latlon-row">
+      <input type="number" id="weather-lat" step="0.0001" placeholder="Latitude">
+      <input type="number" id="weather-lon" step="0.0001" placeholder="Longitude">
+      <button id="weather-save">Set</button>
+    </div>
+
     <h2>Log</h2>
     <pre id="log" class="log"></pre>
+
+    <button id="shutdown-btn" class="danger-btn">Shut down</button>
   </main>
 
   <script>
@@ -63,7 +87,7 @@
       const data = await res.json();
 
       document.getElementById('status-text').textContent =
-        (data.connected ? 'connected' : 'disconnected') + ' · ' + data.mode;
+        (data.paused ? 'disconnected (manual)' : (data.connected ? 'connected' : 'disconnected')) + ' · ' + data.mode;
       document.getElementById('status-dot').classList.toggle('connected', data.connected);
 
       document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -162,12 +186,98 @@
       selectCricket({ view: e.target.value });
     });
 
+    async function loadBleAddress() {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      const input = document.getElementById('ble-address');
+      if (document.activeElement !== input) input.value = data.address || '';
+    }
+
+    document.getElementById('ble-connect').addEventListener('click', async () => {
+      const address = document.getElementById('ble-address').value;
+      await fetch('/api/ble/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address }),
+      });
+      refreshStatus();
+    });
+
+    document.getElementById('ble-disconnect').addEventListener('click', async () => {
+      await fetch('/api/ble/disconnect', { method: 'POST' });
+      refreshStatus();
+    });
+
+    document.getElementById('ble-scan').addEventListener('click', async () => {
+      const statusEl = document.getElementById('ble-scan-status');
+      const resultsEl = document.getElementById('ble-results');
+      const btn = document.getElementById('ble-scan');
+
+      btn.disabled = true;
+      statusEl.textContent = 'Scanning... (~8s)';
+      resultsEl.innerHTML = '';
+
+      try {
+        const res = await fetch('/api/ble/scan', { method: 'POST' });
+        const data = await res.json();
+
+        if (!data.ok) {
+          statusEl.textContent = 'Scan failed: ' + data.error;
+          return;
+        }
+
+        statusEl.textContent = `Found ${data.devices.length} device(s):`;
+        data.devices.forEach(d => {
+          const item = document.createElement('button');
+          item.className = 'ble-result-item';
+          item.textContent = `${d.name} — ${d.address}`;
+          item.addEventListener('click', () => {
+            document.getElementById('ble-address').value = d.address;
+          });
+          resultsEl.appendChild(item);
+        });
+      } catch (err) {
+        statusEl.textContent = 'Scan failed: ' + err;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    async function loadWeatherLocation() {
+      const res = await fetch('/api/weather/location');
+      const data = await res.json();
+      const latInput = document.getElementById('weather-lat');
+      const lonInput = document.getElementById('weather-lon');
+      if (document.activeElement !== latInput) latInput.value = data.lat;
+      if (document.activeElement !== lonInput) lonInput.value = data.lon;
+    }
+
+    document.getElementById('weather-save').addEventListener('click', async () => {
+      const lat = document.getElementById('weather-lat').value;
+      const lon = document.getElementById('weather-lon').value;
+      const res = await fetch('/api/weather/location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat, lon }),
+      });
+      const data = await res.json();
+      if (!data.ok) alert(data.error);
+    });
+
+    document.getElementById('shutdown-btn').addEventListener('click', async () => {
+      if (!confirm('This will stop the app and disconnect the display. Continue?')) return;
+      await fetch('/api/shutdown', { method: 'POST' });
+      document.body.innerHTML = '<main class="panel"><h1>Shut down</h1><p>The app has stopped. Restart it from the terminal to use it again.</p></main>';
+    });
+
     setInterval(refreshStatus, 3000);
     setInterval(refreshCricketMatches, 5000);
     refreshCricketMatches();
     setInterval(refreshLogs, 2000);
     refreshLogs();
     loadCricketTeam();
+    loadBleAddress();
+    loadWeatherLocation();
     setInterval(() => {
       document.getElementById('preview').src = '/preview.png?t=' + Date.now();
     }, 5000);

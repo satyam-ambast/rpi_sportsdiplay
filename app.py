@@ -7,14 +7,23 @@ Run:
 Then open http://localhost:5000
 
 Note: debug/reloader is off on purpose -- Flask's reloader spawns a
-second process, which would open a second BLE connection.
+second process, which would open a second BLE connection. threaded=True
+is on so a slow request (e.g. an 8s BLE scan) doesn't block the rest of
+the UI (status polling, log panel, etc.) while it runs.
 """
+import asyncio
+import os
+import signal
+import threading
+import time
+
 from flask import Flask, render_template, request, jsonify, Response
+from bleak import BleakScanner
 
 import config
 from device_controller import DeviceController
 from modes import MODES
-from applog import setup_logging, get_recent_logs
+from applog import setup_logging, get_recent_logs, log
 
 setup_logging()
 
@@ -94,6 +103,93 @@ def cricket_select():
     })
 
 
+@app.route("/api/ble/scan", methods=["POST"])
+def ble_scan():
+    """
+    Scans for nearby BLE devices (same approach as a standalone
+    bleak.BleakScanner.discover() script). Takes ~8s to respond -- the
+    UI should show a loading state, not block on it silently.
+
+    Note: scanning while the app's own BLE connection to the matrix is
+    active can be flaky depending on your Bluetooth adapter -- some
+    adapters don't like scanning and holding a connection open at the
+    same time. If the matrix drops out after a scan, that's the
+    adapter, not a bug here; just reconnect afterward.
+    """
+    async def _scan():
+        devices = await BleakScanner.discover(timeout=8.0)
+        return [{"name": d.name or "(unknown)", "address": d.address} for d in devices]
+
+    try:
+        results = asyncio.run(_scan())
+    except Exception as e:
+        log.error(f"BLE scan failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    log.info(f"BLE scan found {len(results)} device(s)")
+    return jsonify({"ok": True, "devices": results})
+
+
+@app.route("/api/ble/disconnect", methods=["POST"])
+def ble_disconnect():
+    controller.disconnect_device()
+    return jsonify({"ok": True, **controller.get_status()})
+
+
+@app.route("/api/ble/connect", methods=["POST"])
+def ble_connect():
+    body = request.get_json(silent=True) or request.form
+    address = body.get("address")
+    controller.reconnect_device(address=address)
+    return jsonify({"ok": True, **controller.get_status()})
+
+
+@app.route("/api/weather/location", methods=["GET", "POST"])
+def weather_location():
+    if request.method == "GET":
+        return jsonify({"lat": config.WEATHER_LAT, "lon": config.WEATHER_LON})
+
+    body = request.get_json(silent=True) or request.form
+    try:
+        lat = float(body.get("lat"))
+        lon = float(body.get("lon"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "lat/lon must be numbers"}), 400
+
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return jsonify({"ok": False, "error": "lat must be -90..90, lon must be -180..180"}), 400
+
+    # WeatherMode reads config.WEATHER_LAT/LON fresh on every fetch, so
+    # mutating the config module's attributes here takes effect
+    # immediately -- no need to touch the mode itself. This only affects
+    # the running process; it doesn't persist across a restart (set
+    # WEATHER_LAT/WEATHER_LON as env vars for that).
+    config.WEATHER_LAT = lat
+    config.WEATHER_LON = lon
+    log.info(f"Weather location changed: {lat}, {lon}")
+    controller.force_refresh()
+
+    return jsonify({"ok": True, "lat": lat, "lon": lon})
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def shutdown():
+    """
+    Stops the BLE connection cleanly, then kills the whole process a
+    moment later (after this response has gone out) -- this is meant to
+    actually end `python app.py`, not just show a "disconnected" state.
+    """
+    log.info("Shutdown requested from web UI.")
+    controller.stop()
+
+    def _terminate():
+        time.sleep(0.5)  # let the HTTP response flush before the process dies
+        os._exit(0)
+
+    threading.Thread(target=_terminate, daemon=True).start()
+    return jsonify({"ok": True, "message": "Shutting down..."})
+
+
 @app.route("/api/logs")
 def logs():
     return jsonify(get_recent_logs())
@@ -109,4 +205,4 @@ def preview():
 
 if __name__ == "__main__":
     controller.start()
-    app.run(host=config.FLASK_HOST, port=config.FLASK_PORT, debug=False, use_reloader=False)
+    app.run(host=config.FLASK_HOST, port=config.FLASK_PORT, debug=False, use_reloader=False, threaded=True)

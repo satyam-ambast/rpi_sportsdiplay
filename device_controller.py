@@ -26,6 +26,7 @@ class DeviceController:
         self.address = address
         self.client = None
         self.connected = False
+        self.paused = False  # True after a manual disconnect, until reconnect is requested
 
         self._lock = threading.Lock()
         self.current_mode_key = config.DEFAULT_MODE
@@ -53,13 +54,43 @@ class DeviceController:
         self._stop.set()
         self._thread.join(timeout=5)
 
+    def force_refresh(self):
+        """Skip the wait for the current mode's poll_interval and render now."""
+        self._force_refresh.set()
+
+    def disconnect_device(self):
+        """
+        Manually disconnect, e.g. to free the BLE radio for a scan or to
+        let another app use the device. Sets `paused` so the worker loop
+        stops trying to auto-reconnect until reconnect_device() is called.
+        """
+        log.info("Manual disconnect requested.")
+        self.paused = True
+        if self.client and self.connected:
+            try:
+                self.client.disconnect()
+                log.info("Disconnected (manual).")
+            except Exception as e:
+                log.warning(f"Error during manual disconnect: {e}")
+        self.connected = False
+
+    def reconnect_device(self, address=None):
+        """Resume after a manual disconnect, optionally switching to a new address first."""
+        if address:
+            address = address.strip()
+            if address and address != self.address:
+                log.info(f"Device address changed: {self.address} -> {address}")
+                self.address = address
+        self.paused = False
+        self.force_refresh()
+
     def set_mode(self, key):
         if key not in MODES:
             raise ValueError(f"Unknown mode: {key}")
         log.info(f"Mode change requested: {self.current_mode_key} -> {key}")
         with self._lock:
             self.current_mode_key = key
-        self._force_refresh.set()  # render immediately instead of waiting for poll_interval
+        self.force_refresh()  # render immediately instead of waiting for poll_interval
 
     def set_brightness(self, value):
         value = max(0, min(100, int(value)))
@@ -79,6 +110,8 @@ class DeviceController:
             return {
                 "mode": self.current_mode_key,
                 "connected": self.connected,
+                "paused": self.paused,
+                "address": self.address,
                 "brightness": self.brightness,
                 "last_update": self.last_update,
                 "last_error": self.last_error,
@@ -111,6 +144,10 @@ class DeviceController:
 
         next_render_at = 0
         while not self._stop.is_set():
+            if self.paused:
+                time.sleep(1)
+                continue
+
             if not self.connected:
                 try:
                     self._connect()
