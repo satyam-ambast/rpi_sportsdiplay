@@ -1,6 +1,31 @@
 """
 Formula 1 mode, backed by FastF1 (https://docs.fastf1.dev).
 
+IMPORTANT CAVEAT, straight from FastF1's own docs: FastF1 is NOT built
+for real-time streaming during a session. Its SignalRClient explicitly
+only records raw live-timing data to a file for later analysis --
+"It is not possible to do real-time processing of the data" (their
+wording, see https://docs.fastf1.dev/livetiming.html). There is no
+FastF1 call that hands you a proper live leaderboard update every few
+seconds during a session the way a dedicated live-timing app would.
+
+What this mode does instead, within what FastF1 actually supports via
+simple polling:
+  - Works out which session should currently be happening by comparing
+    now() against the official event schedule (fastf1.get_event_schedule),
+    using a generous duration budget per session type as its time window
+    (the schedule only gives start times, not official end times).
+  - If a session's window is currently active, loads that session and
+    shows its current results. FastF1 re-fetches from the timing API
+    each time .load() is called, so this data does update as a session
+    progresses -- just without push updates or sub-second freshness.
+    This is the closest "live" that FastF1 realistically offers.
+  - If no session is currently in its scheduled window, falls back to
+    the most recently completed session's final results.
+  - Practice sessions (FP1/FP2/FP3) don't get an official finishing
+    Position in FastF1's results (that column is only populated for
+    Race/Qualifying/Sprint*) -- so for those, drivers are ranked by
+    best lap time instead, computed from session.laps.
 
 Multi-page display: 32px only fits 4 short text rows with the pixel
 font (same row budget the cricket scorecard uses), and one of those
@@ -8,6 +33,12 @@ rows is the header, leaving 3 driver rows per page. Results paginate
 automatically -- P1-3 on page 1, P4-6 on page 2, etc. Every page
 repeats the header (3-letter event code + session type) so it's always
 clear what you're looking at.
+
+One known simplification: the header shows "Q" or "SQ" for the whole
+qualifying/sprint-qualifying session rather than guessing which
+knockout segment (Q1/Q2/Q3) is currently underway -- FastF1's schedule
+only gives one start time for the whole ~1hr qualifying block, not
+official sub-segment boundaries, so that isn't reliably derivable.
 
 Setup:
     pip install fastf1
@@ -26,7 +57,7 @@ import time
 import datetime
 
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from modes.base import Mode
 from applog import log
@@ -62,6 +93,66 @@ SESSION_DURATION_MIN = {
     "FP1": 75, "FP2": 75, "FP3": 75,
     "SQ": 75, "S": 45, "Q": 90, "R": 165,
 }
+
+# One color per constructor, all 11 teams on the current (2026) grid,
+# including Audi and Cadillac's expansion of the grid to 11 teams.
+#
+# These are NOT exact real-world livery colors -- several current
+# liveries are close relatives of the same hue (Red Bull navy, Williams
+# sky-blue, and Racing Bulls blue are all "blue"; Ferrari red and Audi's
+# red-adjacent tone are both "red") which is fine on a TV broadcast but
+# becomes genuinely unreadable at 32x32 on an LED matrix, where you only
+# get a handful of pixels to tell two colors apart. So instead every
+# team gets a hue spaced ~33 degrees apart around the full color wheel
+# (360/11 teams), guaranteeing no two teams are ever confusable, with
+# each team assigned to the wheel position closest to its real livery
+# family where that's a reasonable fit (Ferrari->red, McLaren->orange,
+# Aston Martin->green, Mercedes->teal, Alpine->pink, etc). Saturation/
+# brightness matched to the app's existing palette style (e.g. cricket's
+# (255,196,0) gold, (120,200,255) blue) rather than harsh pure primaries.
+TEAM_COLORS = {
+    "FER": (255, 46, 46),    # Ferrari
+    "MCL": (255, 161, 46),   # McLaren
+    "HAS": (238, 255, 46),   # Haas
+    "CAD": (123, 255, 46),   # Cadillac
+    "AST": (46, 255, 84),    # Aston Martin
+    "MER": (46, 255, 199),   # Mercedes
+    "WIL": (46, 199, 255),   # Williams
+    "RBR": (46, 84, 255),    # Red Bull
+    "RB":  (123, 46, 255),   # Racing Bulls
+    "AUD": (238, 46, 255),   # Audi
+    "ALP": (255, 46, 161),   # Alpine
+}
+DEFAULT_ROW_COLOR = (255, 255, 255)  # fallback if a team name doesn't match anything below
+
+# FastF1's TeamName strings vary in exact wording by season/data source
+# (e.g. "Red Bull Racing" vs "Oracle Red Bull Racing"), so this matches
+# by substring rather than requiring an exact string.
+_TEAM_NAME_KEYS = {
+    "ferrari": "FER",
+    "mclaren": "MCL",
+    "haas": "HAS",
+    "cadillac": "CAD",
+    "aston": "AST",
+    "mercedes": "MER",
+    "williams": "WIL",
+    "red bull": "RBR",       # check before "racing bulls" below -- order matters
+    "racing bulls": "RB",
+    "rb ": "RB",
+    "audi": "AUD",
+    "sauber": "AUD",         # Audi's 2026 entry absorbed the Sauber operation
+    "alpine": "ALP",
+}
+
+
+def _team_color(team_name):
+    if not team_name:
+        return DEFAULT_ROW_COLOR
+    key = str(team_name).strip().lower()
+    for needle, code in _TEAM_NAME_KEYS.items():
+        if needle in key:
+            return TEAM_COLORS.get(code, DEFAULT_ROW_COLOR)
+    return DEFAULT_ROW_COLOR
 
 
 def _fmt_gap(td):
@@ -213,11 +304,13 @@ class F1Mode(Mode):
         if session_type in ("FP1", "FP2", "FP3"):
             # No official Position for practice -- rank by best lap instead.
             best = session.laps.groupby("Driver")["LapTime"].min().dropna().sort_values()
+            # Driver -> team name, for coloring rows by constructor below.
+            driver_team = session.laps.drop_duplicates("Driver").set_index("Driver")["Team"].to_dict()
             if len(best):
                 fastest = best.iloc[0]
                 for pos, (code, lap) in enumerate(best.items(), start=1):
                     info = _fmt_laptime(lap) if pos == 1 else _fmt_gap(lap - fastest)
-                    rows.append((str(pos), code, info))
+                    rows.append((str(pos), code, info, driver_team.get(code)))
 
         else:
             results = session.results.dropna(subset=["Position"]).sort_values("Position")
@@ -248,7 +341,7 @@ class F1Mode(Mode):
                     else:
                         info = ""
 
-                rows.append((pos_str, code, info))
+                rows.append((pos_str, code, info, r.get("TeamName")))
 
         self._rows = rows
         self._header = f"{str(event['Location'])[:3].upper()} {session_type}"
@@ -268,13 +361,9 @@ class F1Mode(Mode):
         if not self._rows:
             no_data_text = "NO DATA"
             w = text_width(no_data_text, spacing=1, size="small")
-            blit_text(img, max(0, (SIZE - w) // 2), 12, no_data_text, (120, 120, 130), spacing=1, size="small")
+            blit_text(img, max(0, (SIZE - w) // 2), 12, no_data_text, (255, 255, 255), spacing=1, size="small")
             self.poll_interval = config.F1_SESSION_REFRESH_SECONDS
             return img
-
-        row_h = text_height("small")
-        gap = 2
-        y = 0
 
         total_pages = max(1, -(-len(self._rows) // ROWS_PER_PAGE))  # ceil division
         page = self._page % total_pages
@@ -298,14 +387,41 @@ class F1Mode(Mode):
         max_w = SIZE - 2
         header_text = header_full if text_width(header_full, spacing=1, size="small") <= max_w else self._header
 
-        hw = text_width(header_text, spacing=1, size="small")
-        blit_text(img, max(0, (SIZE - hw) // 2), y, header_text, (255, 30, 30), spacing=1, size="small")
-        y += row_h + gap
+        # Two spaces between driver code and gap/laptime, e.g. "VER  1:18"
+        # not "VER1:18" -- one space is effectively free (the font
+        # already reserves a 1px gap between any two non-space glyphs,
+        # and a space glyph just occupies that gap instead of adding to
+        # it), but a second space does add real width. Worst case
+        # measured at exactly 30px (a 3-letter code + a 4-letter status
+        # code) against the 30px budget -- fits with zero margin, so
+        # don't add a third space without rechecking. A dash separator
+        # was tried earlier and rejected outright: even a single dash
+        # pushes the worst case to 33px, well over budget.
+        #
+        # Layout mirrors cricket_screens.py's create_scorecard_image:
+        # header pinned at a fixed y (not re-centered based on how many
+        # rows this particular page has -- that was making the header
+        # visibly jump up/down between a 3-row page and a shorter final
+        # page), a separator line right under it at the same fixed y
+        # cricket uses (7px), then driver rows below at consistent
+        # spacing, top-down, regardless of how many rows this page has.
+        row_h = text_height("small")
+        gap = 3
+        pad = 1
 
-        for pos, code, info in page_rows:
-            line = f"{code}{info}".strip()
-            color = (255, 215, 0) if pos == "1" else (200, 200, 210)
-            blit_text(img, 0, y, line, color, spacing=1, size="small")
+        hw = text_width(header_text, spacing=1, size="small")
+        blit_text(img, max(0, (SIZE - hw) // 2), pad, header_text, (255, 255, 255), spacing=1, size="small")
+
+        line_y = pad + row_h + 1
+        ImageDraw.Draw(img).line([(0, line_y), (SIZE - 1, line_y)], fill=(60, 60, 65), width=1)
+
+        y = line_y + 2
+        for pos, code, info, team_name in page_rows:
+            line = f"{code}  {info}".strip()
+            color = _team_color(team_name)
+            w = text_width(line, spacing=1, size="small")
+            x = max(0, (SIZE - w) // 2)
+            blit_text(img, x, y, line, color, spacing=1, size="small")
             y += row_h + gap
 
         self._page += 1
